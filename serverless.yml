@@ -1,0 +1,151 @@
+service: todos-serverless-app
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  environment:
+    TODOS_TABLE: ${self:service}-todos-${sls:stage}
+    USERS_TABLE: ${self:service}-users-${sls:stage}
+    JWT_SECRET: ${env:JWT_SECRET, 'dev-secret-change-me'}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:PutItem
+            - dynamodb:GetItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+            - dynamodb:Query
+            - dynamodb:Scan
+          Resource:
+            - !GetAtt TodosTable.Arn
+            - !GetAtt UsersTable.Arn
+
+functions:
+  # ---- Lambda Authorizer ----
+  # Every /todos route below points its `authorizer` field at this function.
+  # API Gateway calls it FIRST on every request; only if it returns an
+  # "Allow" IAM policy does the actual todos handler ever run.
+  authorizer:
+    handler: src/authorizer/authorizer.handler
+
+  # ---- Public auth endpoints (no authorizer attached) ----
+  register:
+    handler: src/handlers/auth/register.handler
+    events:
+      - http:
+          path: /auth/register
+          method: post
+          cors: true
+
+  login:
+    handler: src/handlers/auth/login.handler
+    events:
+      - http:
+          path: /auth/login
+          method: post
+          cors: true
+
+  # ---- Protected todos microservice ----
+  createTodo:
+    handler: src/handlers/todos/create.handler
+    events:
+      - http:
+          path: /todos
+          method: post
+          cors: true
+          authorizer:
+            name: authorizer
+            resultTtlInSeconds: 0
+            identitySource: method.request.header.Authorization
+            type: token
+
+  listTodos:
+    handler: src/handlers/todos/list.handler
+    events:
+      - http:
+          path: /todos
+          method: get
+          cors: true
+          authorizer:
+            name: authorizer
+            resultTtlInSeconds: 0
+            identitySource: method.request.header.Authorization
+            type: token
+
+  getTodo:
+    handler: src/handlers/todos/get.handler
+    events:
+      - http:
+          path: /todos/{id}
+          method: get
+          cors: true
+          authorizer:
+            name: authorizer
+            resultTtlInSeconds: 0
+            identitySource: method.request.header.Authorization
+            type: token
+
+  updateTodo:
+    handler: src/handlers/todos/update.handler
+    events:
+      - http:
+          path: /todos/{id}
+          method: put
+          cors: true
+          authorizer:
+            name: authorizer
+            resultTtlInSeconds: 0
+            identitySource: method.request.header.Authorization
+            type: token
+
+  deleteTodo:
+    handler: src/handlers/todos/delete.handler
+    events:
+      - http:
+          path: /todos/{id}
+          method: delete
+          cors: true
+          authorizer:
+            name: authorizer
+            resultTtlInSeconds: 0
+            identitySource: method.request.header.Authorization
+            type: token
+
+resources:
+  Resources:
+    TodosTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.TODOS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: todoId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: todoId
+            KeyType: RANGE
+
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.USERS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: email
+            AttributeType: S
+        KeySchema:
+          - AttributeName: email
+            KeyType: HASH
+
+plugins:
+  - serverless-offline
